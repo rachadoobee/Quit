@@ -266,9 +266,33 @@ input[type="text"], input[type="number"], input[type="time"] {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
 }
-.reason-edit { flex: 1; }
-.reason-input { flex: 1; }
+.reason-edit { flex: 1; min-width: 0; font-size: 15px; padding: 12px; }
+/* Reason entry box: full width and taller so the text is easy to read. */
+.reason-input {
+  width: 100%;
+  font-size: 16px;       /* 16px also stops iOS auto-zoom on focus */
+  padding: 14px;
+  min-height: 52px;
+}
+/* Stack the reason input above its Add button instead of cramming them
+   into one row, so the box gets the full width. */
+.reason-entry { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.reason-entry .btn-secondary { margin-top: 0; }
 .reason-display { font-size: 16px; margin: 14px 0; }
+
+/* ---------- Quit-date picker / restart / past attempts ---------- */
+.quit-picker { background: var(--bg); margin-top: 12px; }
+.subhead { font-size: 14px; margin: 16px 0 8px; }
+.attempt-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 0; border-bottom: 1px solid var(--border);
+}
+.attempt-dates { font-weight: 600; }
+input[type="date"] {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 12px; font-size: 16px; width: 100%;
+}
 
 /* ---------- Progress / charts ---------- */
 .chart-wrap { position: relative; height: 220px; }

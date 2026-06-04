@@ -1,6 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="192" height="192" viewBox="0 0 192 192">
-  <circle cx="96" cy="96" r="96" fill="#22c55e"/>
-  <text x="96" y="96" font-family="-apple-system, 'Segoe UI', sans-serif"
-        font-size="90" font-weight="700" fill="#ffffff"
-        text-anchor="middle" dominant-baseline="central">QS</text>
+  <!-- Rounded green background so the icon sits inside the app tile -->
+  <rect width="192" height="192" rx="42" fill="#22c55e"/>
+  <!-- No symbol: ring + diagonal backslash, inset to leave a margin -->
+  <g fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round">
+    <circle cx="96" cy="96" r="54"/>
+    <!-- Backslash across the ring (top-left to bottom-right) -->
+    <line x1="57.8" y1="57.8" x2="134.2" y2="134.2"/>
+  </g>
 </svg>

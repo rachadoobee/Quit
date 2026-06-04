@@ -397,14 +397,55 @@
     /* --- Step 2: Tapering plan --- */
     function stepPlan() {
       const startISO = new Date().toISOString(); // preview dates from today
-      const table = planTable(draft.taperPlan, startISO, (week, val) => {
-        const row = draft.taperPlan.find((p) => p.week === week);
-        if (row) row.allowance = val;
+
+      // Holds the editable table; rebuilt when a quit date is chosen.
+      const tableWrap = el('div');
+      function buildTable() {
+        tableWrap.innerHTML = '';
+        tableWrap.appendChild(
+          planTable(draft.taperPlan, startISO, (week, val) => {
+            const row = draft.taperPlan.find((p) => p.week === week);
+            if (row) row.allowance = val;
+          })
+        );
+      }
+      buildTable();
+
+      // Quit-date picker: default 8 weeks out, min = next week.
+      const defaultQuit = new Date();
+      defaultQuit.setDate(defaultQuit.getDate() + 56);
+      const minQuit = new Date();
+      minQuit.setDate(minQuit.getDate() + 7);
+      const quitPicker = el('input', {
+        type: 'date',
+        value: DB.toDateKey(defaultQuit),
+        min: DB.toDateKey(minQuit),
       });
+
+      const quitRow = el('div', { class: 'card quit-picker' }, [
+        el('div', { class: 'field' }, [
+          el('span', {}, 'Want to quit by a set date? Pick it and we’ll build the plan.'),
+          quitPicker,
+        ]),
+        el('button', {
+          class: 'btn-secondary',
+          onClick: () => {
+            draft.taperPlan = Taper.generatePlanForQuitDate(
+              draft.dailyBaseline,
+              startISO,
+              new Date(quitPicker.value + 'T00:00:00')
+            );
+            buildTable();
+            showToast('Plan built for your quit date.');
+          },
+        }, 'Build plan for this date'),
+      ]);
+
       return el('div', { class: 'card' }, [
         el('h2', {}, 'Your tapering plan'),
-        el('p', { class: 'muted' }, 'Week 1 starts at your current usage. You can override any week.'),
-        table,
+        el('p', { class: 'muted' }, 'Week 1 starts at your current usage. You can override any week, or set a quit date below to auto-build the plan.'),
+        tableWrap,
+        quitRow,
         el('div', { class: 'row-gap' }, [
           el('button', { class: 'btn-secondary', onClick: () => { step = 1; render(); } }, 'Back'),
           el('button', { class: 'btn-primary', onClick: () => { step = 3; render(); } }, 'Confirm plan'),
@@ -449,7 +490,7 @@
       return el('div', { class: 'card' }, [
         el('h2', {}, 'Why are you quitting?'),
         listWrap,
-        el('div', { class: 'row-gap' }, [
+        el('div', { class: 'reason-entry' }, [
           inputEl,
           el('button', { class: 'btn-secondary', onClick: add }, 'Add reason'),
         ]),
@@ -1099,14 +1140,52 @@
       const q = Taper.getProjectedQuitDate(s.taperPlan, s.programmeStartDate);
       quitLabel.textContent = q ? `Projected quit date: ${fmtDate(q)}` : 'No quit week set.';
     }
-    const table = planTable(s.taperPlan, s.programmeStartDate, (week, val) => {
-      const row = s.taperPlan.find((p) => p.week === week);
-      if (row) row.allowance = val;
-      updateQuitLabel();
-    });
+    // Rebuildable table so the quit-date picker can regenerate it in place.
+    const planTableWrap = el('div');
+    function buildPlanTable() {
+      planTableWrap.innerHTML = '';
+      planTableWrap.appendChild(
+        planTable(s.taperPlan, s.programmeStartDate, (week, val) => {
+          const row = s.taperPlan.find((p) => p.week === week);
+          if (row) row.allowance = val;
+          updateQuitLabel();
+        })
+      );
+    }
+    buildPlanTable();
     updateQuitLabel();
-    planCard.appendChild(table);
+
+    // Quit-date picker — auto-builds an evenly-reducing plan to that date.
+    const existingQuit = Taper.getProjectedQuitDate(s.taperPlan, s.programmeStartDate);
+    const settingsQuitPicker = el('input', {
+      type: 'date',
+      value: existingQuit ? DB.toDateKey(existingQuit) : '',
+      min: DB.toDateKey(new Date(Date.now() + 7 * 86400000)),
+    });
+    const quitPickerCard = el('div', { class: 'card quit-picker' }, [
+      el('div', { class: 'field' }, [
+        el('span', {}, 'Set a quit date and auto-build the plan'),
+        settingsQuitPicker,
+      ]),
+      el('button', {
+        class: 'btn-secondary',
+        onClick: () => {
+          if (!settingsQuitPicker.value) { showToast('Pick a date first.'); return; }
+          s.taperPlan = Taper.generatePlanForQuitDate(
+            s.dailyBaseline,
+            s.programmeStartDate,
+            new Date(settingsQuitPicker.value + 'T00:00:00')
+          );
+          buildPlanTable();
+          updateQuitLabel();
+          showToast('Plan rebuilt — tap Save plan to keep it.');
+        },
+      }, 'Build plan for this date'),
+    ]);
+
+    planCard.appendChild(planTableWrap);
     planCard.appendChild(quitLabel);
+    planCard.appendChild(quitPickerCard);
     planCard.appendChild(el('button', {
       class: 'btn-primary',
       onClick: async () => { await DB.saveSettings(s); refreshNotifications(); showToast('Plan saved.'); },
@@ -1133,7 +1212,7 @@
     renderReasons();
     const addReasonInput = el('input', { type: 'text', placeholder: 'Add a reason', class: 'reason-input' });
     reasonsCard.appendChild(reasonsList);
-    reasonsCard.appendChild(el('div', { class: 'row-gap' }, [
+    reasonsCard.appendChild(el('div', { class: 'reason-entry' }, [
       addReasonInput,
       el('button', {
         class: 'btn-secondary',
@@ -1191,6 +1270,32 @@
       ]));
     });
 
+    /* --- Restart plan --- */
+    const restartCard = el('div', { class: 'card' }, [el('h3', {}, 'Restart plan')]);
+    restartCard.appendChild(el('p', { class: 'muted small' },
+      'Begin a fresh attempt from today. Your current run is archived to "Past attempts" below, and achievements reset so you can earn them again. Your logs are kept.'));
+    restartCard.appendChild(el('button', {
+      class: 'btn-danger',
+      onClick: () => confirmRestart(),
+    }, 'Restart from today'));
+
+    // Past attempts (archived runs).
+    const history = Array.isArray(s.planHistory) ? s.planHistory : [];
+    if (history.length) {
+      restartCard.appendChild(el('h4', { class: 'subhead' }, 'Past attempts'));
+      history.slice().reverse().forEach((run) => {
+        const startD = new Date(run.startDate);
+        const endD = new Date(run.endDate);
+        restartCard.appendChild(el('div', { class: 'attempt-row' }, [
+          el('div', {}, [
+            el('div', { class: 'attempt-dates' }, `${fmtDate(startD)} → ${fmtDate(endD)}`),
+            el('div', { class: 'muted small' },
+              `${run.daysOnProgramme} days · ${run.totalLogged} pouches logged · started at ${run.startingAllowance}/day`),
+          ]),
+        ]));
+      });
+    }
+
     /* --- Data --- */
     const dataCard = el('div', { class: 'card' }, [
       el('h3', {}, 'Data'),
@@ -1204,8 +1309,63 @@
     dataCard.appendChild(importInput);
 
     main.appendChild(el('div', { class: 'settings' }, [
-      profileCard, planCard, reasonsCard, notifCard, healthCard, dataCard,
+      profileCard, planCard, reasonsCard, notifCard, healthCard, restartCard, dataCard,
     ]));
+  }
+
+  /**
+   * Confirm and perform a programme restart. Archives the current run into
+   * settings.planHistory, resets the start date to today, regenerates the plan
+   * from the current baseline, and clears achievements. Logs are retained.
+   */
+  function confirmRestart() {
+    const content = el('div', {}, [
+      el('h3', {}, 'Restart from today?'),
+      el('p', { class: 'muted' },
+        'Your current run will be archived to Past attempts. The plan restarts at your current baseline from today and achievements reset. Logs are kept.'),
+      el('div', { class: 'row-gap' }, [
+        el('button', { class: 'btn-secondary', onClick: () => close() }, 'Cancel'),
+        el('button', {
+          class: 'btn-danger',
+          onClick: async () => { close(); await doRestart(); },
+        }, 'Restart'),
+      ]),
+    ]);
+    const close = openModal(content);
+  }
+
+  async function doRestart() {
+    const s = state.settings;
+    const now = new Date();
+
+    // Summarise the run being archived.
+    const daysOnProgramme = Taper.getDaysSinceStart(s.programmeStartDate, now);
+    const startMs = new Date(s.programmeStartDate).getTime();
+    const totalLogged = state.logs.filter(
+      (l) => new Date(l.timestamp).getTime() >= startMs
+    ).length;
+
+    const archived = {
+      startDate: s.programmeStartDate,
+      endDate: now.toISOString(),
+      daysOnProgramme,
+      totalLogged,
+      startingAllowance: s.taperPlan[0] ? s.taperPlan[0].allowance : s.dailyBaseline,
+      taperPlan: s.taperPlan,
+    };
+    s.planHistory = Array.isArray(s.planHistory) ? s.planHistory : [];
+    s.planHistory.push(archived);
+
+    // Reset the run.
+    s.programmeStartDate = now.toISOString();
+    s.taperPlan = Taper.generateTaperPlan(s.dailyBaseline);
+
+    await DB.saveSettings(s);
+    await DB.clearAchievements();
+    await reload();
+    refreshNotifications();
+    showToast('Plan restarted from today.');
+    navigate('settings');
   }
 
   async function exportData() {

@@ -50,6 +50,66 @@ function generateTaperPlan(startingUsage) {
 }
 
 /**
+ * Generate a taper plan that reaches 0 by a chosen quit date, reducing by a
+ * roughly constant amount each week (linear taper).
+ *
+ * Week 1 still sits at the starting usage (no free baseline week). The final
+ * plan week — the one containing/at the quit date — has allowance 0. We spread
+ * the reduction as evenly as possible across the weeks in between, rounding to
+ * whole pouches.
+ *
+ * @param {number} startingUsage - whole pouches/day at the start.
+ * @param {string|Date} startDate - programme start date.
+ * @param {string|Date} quitDate - the date the user wants to be at 0.
+ * @returns {Array<{week:number, allowance:number}>}
+ */
+function generatePlanForQuitDate(startingUsage, startDate, quitDate) {
+  const start = startDate instanceof Date ? startDate : new Date(startDate);
+  const quit = quitDate instanceof Date ? quitDate : new Date(quitDate);
+  const startMid = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const quitMid = new Date(quit.getFullYear(), quit.getMonth(), quit.getDate());
+
+  const begin = Math.max(0, Math.round(startingUsage));
+
+  // Which programme week does the quit date fall in? Week 1 = days 1–7.
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const dayIndex = Math.floor((quitMid - startMid) / msPerDay); // 0 = day 1
+  // Quit week is where allowance becomes 0.
+  let quitWeek = Math.floor(Math.max(0, dayIndex) / 7) + 1;
+
+  // We need at least a week 2 to taper through (week 1 holds the start value).
+  // If the quit date is too soon, fall back to the earliest sensible plan:
+  // week 1 at start, week 2 at 0.
+  if (quitWeek < 2) quitWeek = 2;
+
+  // Weeks that actually reduce: weeks 2 .. (quitWeek - 1) step down from the
+  // starting value to just above 0; week `quitWeek` is 0.
+  // Number of reducing steps from `begin` down to 0:
+  const steps = quitWeek - 1; // e.g. quitWeek 9 → 8 steps (weeks 2..9)
+
+  const plan = [{ week: 1, allowance: begin }];
+  for (let w = 2; w <= quitWeek; w++) {
+    // Linear interpolation: at step i of `steps`, allowance = begin * (1 - i/steps).
+    const i = w - 1; // 1-based step number
+    let allowance = Math.round(begin * (1 - i / steps));
+    if (allowance < 0) allowance = 0;
+    // The final week must be exactly 0.
+    if (w === quitWeek) allowance = 0;
+    plan.push({ week: w, allowance });
+  }
+
+  // Guard against rounding leaving a flat stretch at the top: ensure the plan
+  // is non-increasing and strictly reaches 0 at the end.
+  for (let i = 1; i < plan.length; i++) {
+    if (plan[i].allowance > plan[i - 1].allowance) {
+      plan[i].allowance = plan[i - 1].allowance;
+    }
+  }
+
+  return plan;
+}
+
+/**
  * Work out which programme week a given date falls in.
  * Week 1 = days 1–7 from the start date (start date itself is day 1).
  * @param {string} programmeStartDate - ISO string of the start date.
@@ -145,6 +205,7 @@ function getProjectedQuitDate(taperPlan, programmeStartDate) {
 
 window.Taper = {
   generateTaperPlan,
+  generatePlanForQuitDate,
   getProgrammeWeek,
   getDaysSinceStart,
   getTodayAllowance,

@@ -225,6 +225,14 @@ async function unlockAchievement(id) {
   return true;
 }
 
+/**
+ * Remove all unlocked achievements (used when restarting the programme so
+ * they can be earned again on the new run).
+ */
+async function clearAchievements() {
+  return withStore('achievements', 'readwrite', (store) => store.clear());
+}
+
 /* ------------------------------------------------------------------ */
 /* Import / Export                                                     */
 /* ------------------------------------------------------------------ */
@@ -299,6 +307,7 @@ window.DB = {
   saveSettings,
   getUnlockedAchievements,
   unlockAchievement,
+  clearAchievements,
   exportAllData,
   importAllData,
 };
