@@ -288,10 +288,39 @@ input[type="text"], input[type="number"], input[type="time"] {
   padding: 10px 0; border-bottom: 1px solid var(--border);
 }
 .attempt-dates { font-weight: 600; }
+.attempt-row.tappable { cursor: pointer; }
 input[type="date"] {
   background: var(--bg); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px;
   padding: 12px; font-size: 16px; width: 100%;
+}
+
+/* ---------- Plan type switcher + custom phase editor ---------- */
+.plan-type-row { display: flex; gap: 8px; margin-bottom: 12px; }
+.plan-type-row .tab-btn { flex: 1; }
+
+.phase-list { display: flex; flex-direction: column; gap: 10px; margin: 8px 0 12px; }
+.phase-row {
+  background: var(--bg); border: 1px solid var(--border);
+  border-radius: 10px; padding: 10px 12px;
+}
+/* count | strength | days | delete */
+.phase-grid {
+  display: grid;
+  grid-template-columns: 64px 1fr 56px auto;
+  gap: 8px; align-items: end;
+}
+.phase-field { display: flex; flex-direction: column; gap: 4px; }
+.phase-field > span { font-size: 11px; color: var(--muted); }
+.phase-field .cell-input { width: 100%; }
+.phase-strength { width: 100%; padding: 8px; font-size: 14px; }
+.phase-dates { margin-top: 8px; }
+
+/* Archived run viewer */
+.archived-logs { margin-top: 12px; max-height: 50vh; overflow-y: auto; }
+.archived-day {
+  display: flex; justify-content: space-between;
+  padding: 8px 0; border-bottom: 1px solid var(--border);
 }
 
 /* ---------- Progress / charts ---------- */

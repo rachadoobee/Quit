@@ -203,6 +203,143 @@ function getProjectedQuitDate(taperPlan, programmeStartDate) {
   return quitWeek ? quitWeek.date : null;
 }
 
+/* ================================================================== */
+/* PHASE-BASED (custom) plans                                          */
+/*                                                                     */
+/* A phase plan is an ordered list of phases that run back-to-back,    */
+/* each lasting a number of days, with its own pouch count and an      */
+/* optional nicotine strength (guidance only):                         */
+/*                                                                     */
+/*   [ { count: 5, strength: '5-dot', days: 4 },                       */
+/*     { count: 5, strength: '4-dot', days: 4 },                       */
+/*     { count: 4, strength: '4-dot', days: 5 }, ... ]                 */
+/*                                                                     */
+/* Day 1 of the programme = the first day of phase 1. When the plan    */
+/* runs out, the allowance holds at 0 (quit).                          */
+/* ================================================================== */
+
+/**
+ * Day index (0-based) since the programme start for a given date.
+ * Day 1 of the programme → 0.
+ */
+function dayIndexFor(programmeStartDate, date) {
+  const start = new Date(programmeStartDate);
+  const d = date instanceof Date ? date : new Date(date);
+  const startMid = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const dMid = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const msPerDay = 24 * 60 * 60 * 1000;
+  return Math.floor((dMid - startMid) / msPerDay);
+}
+
+/**
+ * Find the phase active on a given date.
+ * @param {Array<{count:number, strength:string, days:number}>} phases
+ * @param {string} programmeStartDate
+ * @param {string|Date} date
+ * @returns {{count:number, strength:string, days:number, index:number}|null}
+ *   index is the 0-based phase position; null if before the start.
+ *   After the last phase, returns a synthetic quit phase {count:0}.
+ */
+function getPhaseForDate(phases, programmeStartDate, date) {
+  if (!phases || phases.length === 0) return { count: 0, strength: '', days: 0, index: -1 };
+  let idx = dayIndexFor(programmeStartDate, date);
+  if (idx < 0) idx = 0; // before start → treat as first phase
+  let cursor = 0;
+  for (let i = 0; i < phases.length; i++) {
+    const len = Math.max(0, Math.round(phases[i].days));
+    if (idx < cursor + len) {
+      return { ...phases[i], index: i };
+    }
+    cursor += len;
+  }
+  // Past the end of the plan → quit.
+  return { count: 0, strength: '', days: 0, index: phases.length };
+}
+
+/** Today's allowance from a phase plan. */
+function getPhaseAllowance(phases, programmeStartDate, today = new Date()) {
+  const phase = getPhaseForDate(phases, programmeStartDate, today);
+  return phase ? phase.count : 0;
+}
+
+/**
+ * Total length of a phase plan in days (sum of all phase durations).
+ */
+function phasePlanLengthDays(phases) {
+  if (!phases) return 0;
+  return phases.reduce((sum, p) => sum + Math.max(0, Math.round(p.days)), 0);
+}
+
+/**
+ * Projected quit date for a phase plan = start + total days (the day after the
+ * last active phase day, i.e. the first day at 0).
+ * @returns {Date|null}
+ */
+function getPhaseQuitDate(phases, programmeStartDate) {
+  if (!phases || phases.length === 0) return null;
+  const start = new Date(programmeStartDate);
+  const startMid = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  const total = phasePlanLengthDays(phases);
+  const d = new Date(startMid);
+  d.setDate(startMid.getDate() + total);
+  return d;
+}
+
+/**
+ * Attach the start/end date of each phase, for display in the editor/table.
+ * @returns {Array<{...phase, index, startDate:Date, endDate:Date}>}
+ */
+function phasesWithDates(phases, programmeStartDate) {
+  const start = new Date(programmeStartDate);
+  const startMid = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+  let cursor = 0;
+  return (phases || []).map((p, i) => {
+    const len = Math.max(0, Math.round(p.days));
+    const sd = new Date(startMid);
+    sd.setDate(startMid.getDate() + cursor);
+    const ed = new Date(startMid);
+    ed.setDate(startMid.getDate() + cursor + Math.max(0, len - 1));
+    cursor += len;
+    return { ...p, index: i, startDate: sd, endDate: ed };
+  });
+}
+
+/* ---- Unified accessors that work for BOTH plan types ---- */
+/* A settings object carries planType: 'weekly' | 'phases'.            */
+
+/** Today's allowance regardless of plan type. */
+function allowanceToday(settings, today = new Date()) {
+  if (settings.planType === 'phases') {
+    return getPhaseAllowance(settings.phases, settings.programmeStartDate, today);
+  }
+  return getTodayAllowance(settings.taperPlan, settings.programmeStartDate, today);
+}
+
+/** Allowance on a specific date regardless of plan type. */
+function allowanceOnDate(settings, date) {
+  if (settings.planType === 'phases') {
+    return getPhaseAllowance(settings.phases, settings.programmeStartDate, date);
+  }
+  return getAllowanceForDate(settings.taperPlan, settings.programmeStartDate, date);
+}
+
+/** Projected quit date regardless of plan type. */
+function quitDateFor(settings) {
+  if (settings.planType === 'phases') {
+    return getPhaseQuitDate(settings.phases, settings.programmeStartDate);
+  }
+  return getProjectedQuitDate(settings.taperPlan, settings.programmeStartDate);
+}
+
+/** The current strength guidance string ('' if none / weekly plan). */
+function strengthToday(settings, today = new Date()) {
+  if (settings.planType === 'phases') {
+    const phase = getPhaseForDate(settings.phases, settings.programmeStartDate, today);
+    return phase ? phase.strength || '' : '';
+  }
+  return '';
+}
+
 window.Taper = {
   generateTaperPlan,
   generatePlanForQuitDate,
@@ -212,4 +349,15 @@ window.Taper = {
   getAllowanceForDate,
   planWithDates,
   getProjectedQuitDate,
+  // phase-based
+  getPhaseForDate,
+  getPhaseAllowance,
+  phasePlanLengthDays,
+  getPhaseQuitDate,
+  phasesWithDates,
+  // unified
+  allowanceToday,
+  allowanceOnDate,
+  quitDateFor,
+  strengthToday,
 };

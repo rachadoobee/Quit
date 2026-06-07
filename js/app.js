@@ -157,11 +157,7 @@
     let run = 0;
     days.forEach(({ date, key }) => {
       const usage = counts.get(key) || 0;
-      const allowance = Taper.getAllowanceForDate(
-        state.settings.taperPlan,
-        state.settings.programmeStartDate,
-        date
-      );
+      const allowance = Taper.allowanceOnDate(state.settings, date);
       if (usage <= allowance) {
         run += 1;
         longest = Math.max(longest, run);
@@ -173,11 +169,7 @@
     for (let i = days.length - 1; i >= 0; i--) {
       const { date, key } = days[i];
       const usage = counts.get(key) || 0;
-      const allowance = Taper.getAllowanceForDate(
-        state.settings.taperPlan,
-        state.settings.programmeStartDate,
-        date
-      );
+      const allowance = Taper.allowanceOnDate(state.settings, date);
       if (usage <= allowance) current += 1;
       else break;
     }
@@ -192,11 +184,7 @@
     const groups = new Map();
     days.forEach(({ date, key }) => {
       const usage = counts.get(key) || 0;
-      const allowance = Taper.getAllowanceForDate(
-        state.settings.taperPlan,
-        state.settings.programmeStartDate,
-        date
-      );
+      const allowance = Taper.allowanceOnDate(state.settings, date);
       const within = usage <= allowance;
       // Compute Monday-based week key.
       const tmp = new Date(date);
@@ -227,11 +215,24 @@
   function buildStats() {
     const s = state.settings;
     const daysSinceStart = Taper.getDaysSinceStart(s.programmeStartDate);
-    const week = Taper.getProgrammeWeek(s.programmeStartDate);
-    const startingAllowance = s.taperPlan[0] ? s.taperPlan[0].allowance : s.dailyBaseline;
-    const currentAllowance = Taper.getTodayAllowance(s.taperPlan, s.programmeStartDate);
+    const currentAllowance = Taper.allowanceToday(s);
     const { current, longest } = computeStreaks();
-    const finalWeek = s.taperPlan[s.taperPlan.length - 1].week;
+
+    // starting allowance + "reached quit" differ by plan type.
+    let startingAllowance;
+    let reachedQuit;
+    if (s.planType === 'phases') {
+      startingAllowance = s.phases && s.phases[0] ? s.phases[0].count : s.dailyBaseline;
+      const totalDays = Taper.phasePlanLengthDays(s.phases);
+      reachedQuit = daysSinceStart > totalDays && totalDays > 0;
+    } else {
+      startingAllowance = s.taperPlan[0] ? s.taperPlan[0].allowance : s.dailyBaseline;
+      const week = Taper.getProgrammeWeek(s.programmeStartDate);
+      const finalWeek = s.taperPlan[s.taperPlan.length - 1].week;
+      reachedQuit =
+        week >= finalWeek &&
+        s.taperPlan[s.taperPlan.length - 1].allowance === 0;
+    }
 
     return {
       daysSinceStart,
@@ -242,7 +243,7 @@
       currentAllowance,
       completedWeek1AtStart: daysSinceStart > 7, // finished the whole of week 1
       hadZeroDay: hadZeroDay(),
-      reachedQuitWeek: week >= finalWeek && s.taperPlan[s.taperPlan.length - 1].allowance === 0,
+      reachedQuitWeek: reachedQuit,
       moneySaved: computeMoneySaved(),
     };
   }
@@ -316,10 +317,7 @@
   function refreshNotifications() {
     if (!state.settings) return;
     NotificationsManager.refresh(state.settings, {
-      allowanceToday: Taper.getTodayAllowance(
-        state.settings.taperPlan,
-        state.settings.programmeStartDate
-      ),
+      allowanceToday: Taper.allowanceToday(state.settings),
       programmeWeek: Taper.getProgrammeWeek(state.settings.programmeStartDate),
       reasons: state.settings.reasons,
       getTodayCount: todayCount,
@@ -338,7 +336,9 @@
       dailyBaseline: DEFAULTS.dailyBaseline,
       packCost: DEFAULTS.packCost,
       pouchesPerPack: DEFAULTS.pouchesPerPack,
+      planType: 'weekly',
       taperPlan: Taper.generateTaperPlan(DEFAULTS.dailyBaseline),
+      phases: [],
       reasons: [],
       notifications: {
         morningEnabled: true,
@@ -549,9 +549,12 @@
       packCost: draft.packCost,
       pouchesPerPack: draft.pouchesPerPack,
       programmeStartDate: new Date().toISOString(),
+      planType: draft.planType || 'weekly',
       taperPlan: draft.taperPlan,
+      phases: draft.phases || [],
       reasons: draft.reasons,
       notifications: draft.notifications,
+      planHistory: [],
       setupComplete: true,
     };
     await DB.saveSettings(settings);
@@ -641,10 +644,11 @@
 
   function renderHome() {
     const s = state.settings;
-    const allowance = Taper.getTodayAllowance(s.taperPlan, s.programmeStartDate);
+    const allowance = Taper.allowanceToday(s);
     const count = todayCount();
     const week = Taper.getProgrammeWeek(s.programmeStartDate);
     const daysSince = Taper.getDaysSinceStart(s.programmeStartDate);
+    const strength = Taper.strengthToday(s);
     const { current } = computeStreaks();
     const saved = computeMoneySaved();
 
@@ -680,11 +684,19 @@
     const remindBtn = el('button', { class: 'btn-secondary remind-btn' }, 'Remind me why');
     remindBtn.addEventListener('click', showReasonModal);
 
-    // Taper strip.
+    // Taper strip. Phase plans show the phase + strength; weekly plans show the week.
     const pct = allowance > 0 ? Math.min(100, (count / allowance) * 100) : (count > 0 ? 100 : 0);
+    let stripLabel;
+    if (s.planType === 'phases') {
+      const phase = Taper.getPhaseForDate(s.phases, s.programmeStartDate, new Date());
+      const phaseNum = phase && phase.index >= 0 ? phase.index + 1 : '–';
+      const strengthBit = strength ? ` · ${strength}` : '';
+      stripLabel = `Phase ${phaseNum}${strengthBit} · ${allowance} pouches allowed today`;
+    } else {
+      stripLabel = `Week ${week} of your plan · ${allowance} pouches allowed today`;
+    }
     const strip = el('div', { class: 'card taper-strip' }, [
-      el('div', { class: 'taper-strip-label' },
-        `Week ${week} of your plan · ${allowance} pouches allowed today`),
+      el('div', { class: 'taper-strip-label' }, stripLabel),
       el('div', { class: 'progress-track' }, [
         el('div', { class: 'progress-fill', style: `width:${pct}%` }),
       ]),
@@ -713,7 +725,7 @@
 
   async function onLogTap(btn) {
     const s = state.settings;
-    const allowance = Taper.getTodayAllowance(s.taperPlan, s.programmeStartDate);
+    const allowance = Taper.allowanceToday(s);
     const count = todayCount();
 
     if (count >= allowance) {
@@ -837,7 +849,7 @@
       d.setDate(d.getDate() - i);
       const key = DB.toDateKey(d);
       const usage = counts.get(key) || 0;
-      const allowance = Taper.getAllowanceForDate(s.taperPlan, s.programmeStartDate, d);
+      const allowance = Taper.allowanceOnDate(s, d);
       days14.push({
         label: d.toLocaleDateString(undefined, { day: 'numeric', month: 'short' }),
         usage,
@@ -965,7 +977,7 @@
     keys.forEach((key) => {
       const entries = byDay.get(key).sort((a, b) => b.timestamp.localeCompare(a.timestamp));
       const date = new Date(key + 'T00:00:00');
-      const allowance = Taper.getAllowanceForDate(s.taperPlan, s.programmeStartDate, date);
+      const allowance = Taper.allowanceOnDate(s, date);
       const within = entries.length <= allowance;
 
       const detail = el('div', { class: 'day-entries', style: 'display:none' });
@@ -1087,7 +1099,7 @@
         cls += ' grey';
       } else {
         const usage = counts.get(key) || 0;
-        const allowance = Taper.getAllowanceForDate(s.taperPlan, s.programmeStartDate, date);
+        const allowance = Taper.allowanceOnDate(s, date);
         const over = usage - allowance;
         if (over <= 0) cls += ' green';
         else if (over === 1) cls += ' amber';
@@ -1097,7 +1109,7 @@
       const cell = el('div', { class: cls }, String(day));
       cell.addEventListener('click', () => {
         const usage = counts.get(key) || 0;
-        const allowance = Taper.getAllowanceForDate(s.taperPlan, s.programmeStartDate, date);
+        const allowance = Taper.allowanceOnDate(s, date);
         const inProgramme = date >= startProgMid && date <= tMid;
         openModal(el('div', {}, [
           el('h3', {}, fmtDate(date)),
@@ -1115,32 +1127,29 @@
   /* SCREEN: SETTINGS                                               */
   /* ============================================================== */
 
-  function renderSettings() {
-    const s = state.settings;
-    const main = $('#app-main');
-    main.innerHTML = '';
+  /** A small pill button for the plan-type switcher. */
+  function planTypeBtn(label, active, onClick) {
+    const b = el('button', { class: 'tab-btn' + (active ? ' active' : '') }, label);
+    b.addEventListener('click', onClick);
+    return b;
+  }
 
-    /* --- Profile --- */
-    const profileCard = el('div', { class: 'card' }, [
-      el('h3', {}, 'Profile'),
-      field('Name', input('text', s.name, (v) => (s.name = v))),
-      field('Daily baseline', numInput(s.dailyBaseline, (v) => (s.dailyBaseline = v), 0)),
-      field('Pack cost (£)', numInput(s.packCost, (v) => (s.packCost = v), 0, 0.01)),
-      field('Pouches per pack', numInput(s.pouchesPerPack, (v) => (s.pouchesPerPack = v), 1)),
-      el('button', {
-        class: 'btn-primary',
-        onClick: async () => { await DB.saveSettings(s); showToast('Profile saved.'); },
-      }, 'Save profile'),
-    ]);
-
-    /* --- Taper plan --- */
-    const planCard = el('div', { class: 'card' }, [el('h3', {}, 'Taper plan')]);
-    const quitLabel = el('p', { class: 'muted' });
-    function updateQuitLabel() {
-      const q = Taper.getProjectedQuitDate(s.taperPlan, s.programmeStartDate);
-      quitLabel.textContent = q ? `Projected quit date: ${fmtDate(q)}` : 'No quit week set.';
+  /**
+   * Build a starting set of phases from an existing weekly plan: one phase per
+   * week (7 days each), carrying allowance as the count. Strength left blank
+   * for the user to fill in.
+   */
+  function seedPhasesFromWeekly(taperPlan) {
+    if (!Array.isArray(taperPlan) || taperPlan.length === 0) {
+      return [{ count: 5, strength: '', days: 7 }, { count: 0, strength: '', days: 1 }];
     }
-    // Rebuildable table so the quit-date picker can regenerate it in place.
+    return taperPlan.map((p) => ({ count: p.allowance, strength: '', days: 7 }));
+  }
+
+  /** Weekly plan editor (table + quit-date auto-build), rendered into `body`. */
+  function buildWeeklyEditor(body, s, updateQuitLabel) {
+    body.innerHTML = '';
+
     const planTableWrap = el('div');
     function buildPlanTable() {
       planTableWrap.innerHTML = '';
@@ -1153,9 +1162,7 @@
       );
     }
     buildPlanTable();
-    updateQuitLabel();
 
-    // Quit-date picker — auto-builds an evenly-reducing plan to that date.
     const existingQuit = Taper.getProjectedQuitDate(s.taperPlan, s.programmeStartDate);
     const settingsQuitPicker = el('input', {
       type: 'date',
@@ -1183,9 +1190,138 @@
       }, 'Build plan for this date'),
     ]);
 
-    planCard.appendChild(planTableWrap);
+    body.appendChild(planTableWrap);
+    body.appendChild(quitPickerCard);
+  }
+
+  /**
+   * Custom phase editor: a list of rows, each {count, strength, days}, with
+   * add/delete and live recompute of dates + quit date. Rendered into `body`.
+   */
+  function buildPhaseEditor(body, s, updateQuitLabel) {
+    body.innerHTML = '';
+    if (!Array.isArray(s.phases)) s.phases = [];
+
+    body.appendChild(el('p', { class: 'muted small' },
+      'Each phase runs for a set number of days at a pouch count and strength. ' +
+      'Phases run back-to-back from your start date. Add a final phase of 0 to mark quitting.'));
+
+    const rowsWrap = el('div', { class: 'phase-list' });
+
+    function rebuild() {
+      rowsWrap.innerHTML = '';
+      const dated = Taper.phasesWithDates(s.phases, s.programmeStartDate);
+      s.phases.forEach((phase, i) => {
+        const d = dated[i];
+
+        const countIn = el('input', { type: 'number', min: 0, value: phase.count, class: 'cell-input' });
+        countIn.addEventListener('input', (e) => {
+          phase.count = Math.max(0, parseInt(e.target.value, 10) || 0);
+        });
+
+        const strengthIn = el('input', {
+          type: 'text', value: phase.strength || '', placeholder: 'e.g. 5-dot', class: 'phase-strength',
+        });
+        strengthIn.addEventListener('input', (e) => { phase.strength = e.target.value; });
+
+        const daysIn = el('input', { type: 'number', min: 1, value: phase.days, class: 'cell-input' });
+        daysIn.addEventListener('input', (e) => {
+          phase.days = Math.max(1, parseInt(e.target.value, 10) || 1);
+          rebuild();          // dates depend on durations
+          updateQuitLabel();
+        });
+
+        const dateLabel = el('div', { class: 'muted small phase-dates' },
+          `${fmtDate(d.startDate)} → ${fmtDate(d.endDate)}`);
+
+        rowsWrap.appendChild(el('div', { class: 'phase-row' }, [
+          el('div', { class: 'phase-grid' }, [
+            el('label', { class: 'phase-field' }, [el('span', {}, 'Count'), countIn]),
+            el('label', { class: 'phase-field' }, [el('span', {}, 'Strength'), strengthIn]),
+            el('label', { class: 'phase-field' }, [el('span', {}, 'Days'), daysIn]),
+            iconBtn('🗑', () => { s.phases.splice(i, 1); rebuild(); updateQuitLabel(); }),
+          ]),
+          dateLabel,
+        ]));
+      });
+    }
+    rebuild();
+
+    const addBtn = el('button', { class: 'btn-secondary' }, '+ Add phase');
+    addBtn.addEventListener('click', () => {
+      // Sensible default: copy the last phase's count, 7 days.
+      const last = s.phases[s.phases.length - 1];
+      s.phases.push({
+        count: last ? Math.max(0, last.count - 1) : (s.dailyBaseline || 5),
+        strength: last ? last.strength : '',
+        days: 7,
+      });
+      rebuild();
+      updateQuitLabel();
+    });
+
+    body.appendChild(rowsWrap);
+    body.appendChild(addBtn);
+  }
+
+  function renderSettings() {
+    const s = state.settings;
+    const main = $('#app-main');
+    main.innerHTML = '';
+
+    /* --- Profile --- */
+    const profileCard = el('div', { class: 'card' }, [
+      el('h3', {}, 'Profile'),
+      field('Name', input('text', s.name, (v) => (s.name = v))),
+      field('Daily baseline', numInput(s.dailyBaseline, (v) => (s.dailyBaseline = v), 0)),
+      field('Pack cost (£)', numInput(s.packCost, (v) => (s.packCost = v), 0, 0.01)),
+      field('Pouches per pack', numInput(s.pouchesPerPack, (v) => (s.pouchesPerPack = v), 1)),
+      el('button', {
+        class: 'btn-primary',
+        onClick: async () => { await DB.saveSettings(s); showToast('Profile saved.'); },
+      }, 'Save profile'),
+    ]);
+
+    /* --- Taper plan (weekly OR custom phases) --- */
+    const planCard = el('div', { class: 'card' }, [el('h3', {}, 'Taper plan')]);
+    const quitLabel = el('p', { class: 'muted' });
+    function updateQuitLabel() {
+      const q = Taper.quitDateFor(s);
+      quitLabel.textContent = q ? `Projected quit date: ${fmtDate(q)}` : 'No quit date set.';
+    }
+
+    // Plan-type switcher.
+    const typeRow = el('div', { class: 'plan-type-row' }, [
+      planTypeBtn('Weekly', s.planType !== 'phases', () => switchType('weekly')),
+      planTypeBtn('Custom phases', s.planType === 'phases', () => switchType('phases')),
+    ]);
+
+    // Body holds whichever editor is active.
+    const planBody = el('div');
+
+    function switchType(type) {
+      if (type === 'phases' && s.planType !== 'phases') {
+        // Seed phases from the existing weekly plan (or a sensible default).
+        if (!Array.isArray(s.phases) || s.phases.length === 0) {
+          s.phases = seedPhasesFromWeekly(s.taperPlan);
+        }
+        s.planType = 'phases';
+      } else if (type === 'weekly') {
+        s.planType = 'weekly';
+      }
+      renderSettings(); // simplest: re-render so the switcher + body update
+    }
+
+    if (s.planType === 'phases') {
+      buildPhaseEditor(planBody, s, updateQuitLabel);
+    } else {
+      buildWeeklyEditor(planBody, s, updateQuitLabel);
+    }
+    updateQuitLabel();
+
+    planCard.appendChild(typeRow);
+    planCard.appendChild(planBody);
     planCard.appendChild(quitLabel);
-    planCard.appendChild(quitPickerCard);
     planCard.appendChild(el('button', {
       class: 'btn-primary',
       onClick: async () => { await DB.saveSettings(s); refreshNotifications(); showToast('Plan saved.'); },
@@ -1273,26 +1409,29 @@
     /* --- Restart plan --- */
     const restartCard = el('div', { class: 'card' }, [el('h3', {}, 'Restart plan')]);
     restartCard.appendChild(el('p', { class: 'muted small' },
-      'Begin a fresh attempt from today. Your current run is archived to "Past attempts" below, and achievements reset so you can earn them again. Your logs are kept.'));
+      'Begin a fresh attempt from today. Your current run — including its logs — is moved to "Past attempts" below so your new History starts clean. Achievements reset so you can earn them again.'));
     restartCard.appendChild(el('button', {
       class: 'btn-danger',
       onClick: () => confirmRestart(),
     }, 'Restart from today'));
 
-    // Past attempts (archived runs).
+    // Past attempts (archived runs). Each is tappable to view its logs.
     const history = Array.isArray(s.planHistory) ? s.planHistory : [];
     if (history.length) {
       restartCard.appendChild(el('h4', { class: 'subhead' }, 'Past attempts'));
       history.slice().reverse().forEach((run) => {
         const startD = new Date(run.startDate);
         const endD = new Date(run.endDate);
-        restartCard.appendChild(el('div', { class: 'attempt-row' }, [
+        const row = el('div', { class: 'attempt-row tappable' }, [
           el('div', {}, [
             el('div', { class: 'attempt-dates' }, `${fmtDate(startD)} → ${fmtDate(endD)}`),
             el('div', { class: 'muted small' },
               `${run.daysOnProgramme} days · ${run.totalLogged} pouches logged · started at ${run.startingAllowance}/day`),
           ]),
-        ]));
+          el('span', { class: 'muted' }, '›'),
+        ]);
+        row.addEventListener('click', () => showArchivedRun(run));
+        restartCard.appendChild(row);
       });
     }
 
@@ -1338,34 +1477,91 @@
     const s = state.settings;
     const now = new Date();
 
-    // Summarise the run being archived.
-    const daysOnProgramme = Taper.getDaysSinceStart(s.programmeStartDate, now);
+    // Logs belonging to this run = those on/after the programme start. We move
+    // them into the archive and remove them from the live logs store so they
+    // no longer appear in History.
     const startMs = new Date(s.programmeStartDate).getTime();
-    const totalLogged = state.logs.filter(
+    const runLogs = state.logs.filter(
       (l) => new Date(l.timestamp).getTime() >= startMs
-    ).length;
+    );
+
+    const daysOnProgramme = Taper.getDaysSinceStart(s.programmeStartDate, now);
+    const startingAllowance =
+      s.planType === 'phases'
+        ? (s.phases && s.phases[0] ? s.phases[0].count : s.dailyBaseline)
+        : (s.taperPlan[0] ? s.taperPlan[0].allowance : s.dailyBaseline);
 
     const archived = {
       startDate: s.programmeStartDate,
       endDate: now.toISOString(),
       daysOnProgramme,
-      totalLogged,
-      startingAllowance: s.taperPlan[0] ? s.taperPlan[0].allowance : s.dailyBaseline,
+      totalLogged: runLogs.length,
+      startingAllowance,
+      planType: s.planType || 'weekly',
       taperPlan: s.taperPlan,
+      phases: s.phases || [],
+      // The actual logs from this run, kept for the record.
+      logs: runLogs.map((l) => ({ timestamp: l.timestamp, note: l.note || null })),
     };
     s.planHistory = Array.isArray(s.planHistory) ? s.planHistory : [];
     s.planHistory.push(archived);
 
-    // Reset the run.
+    // Reset the run: new start date; regenerate plan from baseline. Keep the
+    // current plan type so a phase user stays on phases (cleared to re-edit).
     s.programmeStartDate = now.toISOString();
     s.taperPlan = Taper.generateTaperPlan(s.dailyBaseline);
+    if (s.planType === 'phases') {
+      // Start phases fresh from the weekly default so the user can re-customise.
+      s.phases = seedPhasesFromWeekly(s.taperPlan);
+    }
 
+    // Persist settings (with archive) first, then delete the moved logs.
     await DB.saveSettings(s);
+    for (const l of runLogs) {
+      await DB.deleteLog(l.id);
+    }
     await DB.clearAchievements();
     await reload();
     refreshNotifications();
-    showToast('Plan restarted from today.');
+    showToast('Plan restarted. Past run archived.');
     navigate('settings');
+  }
+
+  /** Show an archived run's summary and its logs grouped by day. */
+  function showArchivedRun(run) {
+    const startD = new Date(run.startDate);
+    const endD = new Date(run.endDate);
+    const logs = Array.isArray(run.logs) ? run.logs : [];
+
+    // Group archived logs by day.
+    const byDay = new Map();
+    logs.forEach((l) => {
+      const k = DB.toDateKey(l.timestamp);
+      if (!byDay.has(k)) byDay.set(k, []);
+      byDay.get(k).push(l);
+    });
+    const keys = Array.from(byDay.keys()).sort((a, b) => b.localeCompare(a));
+
+    const list = el('div', { class: 'archived-logs' });
+    if (keys.length === 0) {
+      list.appendChild(el('p', { class: 'muted' }, 'No logs were recorded in this run.'));
+    } else {
+      keys.forEach((key) => {
+        const entries = byDay.get(key);
+        list.appendChild(el('div', { class: 'archived-day' }, [
+          el('span', { class: 'day-date' }, fmtDate(new Date(key + 'T00:00:00'))),
+          el('span', { class: 'day-total' }, ` ${entries.length} pouches`),
+        ]));
+      });
+    }
+
+    openModal(el('div', {}, [
+      el('h3', {}, 'Past attempt'),
+      el('p', { class: 'muted' }, `${fmtDate(startD)} → ${fmtDate(endD)}`),
+      el('p', { class: 'muted small' },
+        `${run.daysOnProgramme} days · ${run.totalLogged} pouches · started at ${run.startingAllowance}/day`),
+      list,
+    ]));
   }
 
   async function exportData() {
