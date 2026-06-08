@@ -6,7 +6,7 @@
  * we go (so the Chart.js CDN file is cached after the first online load).
  */
 
-const CACHE_NAME = 'quitsnus-v3';
+const CACHE_NAME = 'quitsnus-v4';
 
 // App shell assets to pre-cache on install.
 const PRECACHE = [

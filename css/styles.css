@@ -315,6 +315,8 @@ input[type="date"] {
 .phase-field .cell-input { width: 100%; }
 .phase-strength { width: 100%; padding: 8px; font-size: 14px; }
 .phase-dates { margin-top: 8px; }
+.phase-error { color: var(--red); font-size: 12px; margin-top: 6px; }
+input.invalid { border-color: var(--red); }
 
 /* Archived run viewer */
 .archived-logs { margin-top: 12px; max-height: 50vh; overflow-y: auto; }

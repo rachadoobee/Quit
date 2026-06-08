@@ -1208,41 +1208,80 @@
 
     const rowsWrap = el('div', { class: 'phase-list' });
 
+    // Date labels per row, so we can refresh dates without rebuilding the
+    // whole list (which would steal focus from the input being typed in).
+    let dateLabels = [];
+    function refreshPhaseDates() {
+      const dated = Taper.phasesWithDates(s.phases, s.programmeStartDate);
+      dateLabels.forEach((label, i) => {
+        if (dated[i]) {
+          label.textContent = `${fmtDate(dated[i].startDate)} → ${fmtDate(dated[i].endDate)}`;
+        }
+      });
+    }
+
     function rebuild() {
       rowsWrap.innerHTML = '';
+      dateLabels = [];
       const dated = Taper.phasesWithDates(s.phases, s.programmeStartDate);
       s.phases.forEach((phase, i) => {
         const d = dated[i];
 
-        const countIn = el('input', { type: 'number', min: 0, value: phase.count, class: 'cell-input' });
+        // Count — plain text box with numeric keypad (no spinner arrows).
+        const countIn = el('input', {
+          type: 'text', inputmode: 'numeric', value: phase.count, class: 'cell-input',
+        });
         countIn.addEventListener('input', (e) => {
-          phase.count = Math.max(0, parseInt(e.target.value, 10) || 0);
+          const v = parseInt(e.target.value, 10);
+          phase.count = Number.isNaN(v) ? 0 : Math.max(0, v);
         });
 
+        // Strength — type the nicotine content per pouch, e.g. "10.9mg".
         const strengthIn = el('input', {
-          type: 'text', value: phase.strength || '', placeholder: 'e.g. 5-dot', class: 'phase-strength',
+          type: 'text', value: phase.strength || '', placeholder: 'e.g. 10.9mg', class: 'phase-strength',
         });
         strengthIn.addEventListener('input', (e) => { phase.strength = e.target.value; });
 
-        const daysIn = el('input', { type: 'number', min: 1, value: phase.days, class: 'cell-input' });
-        daysIn.addEventListener('input', (e) => {
-          phase.days = Math.max(1, parseInt(e.target.value, 10) || 1);
-          rebuild();          // dates depend on durations
-          updateQuitLabel();
+        // Days — plain text box with numeric keypad. Validate as a number and
+        // show an inline error if it isn't one (instead of silently coercing).
+        const daysIn = el('input', {
+          type: 'text', inputmode: 'numeric', value: phase.days, class: 'cell-input',
         });
-
+        const daysError = el('div', { class: 'phase-error', style: 'display:none' },
+          'Enter a whole number of days');
         const dateLabel = el('div', { class: 'muted small phase-dates' },
           `${fmtDate(d.startDate)} → ${fmtDate(d.endDate)}`);
+
+        daysIn.addEventListener('input', (e) => {
+          const raw = e.target.value.trim();
+          const v = parseInt(raw, 10);
+          // Invalid: empty, not a number, or contains non-digits.
+          if (raw === '' || Number.isNaN(v) || !/^\d+$/.test(raw) || v < 1) {
+            daysError.style.display = '';
+            daysIn.classList.add('invalid');
+            return; // leave phase.days unchanged so dates stay sensible
+          }
+          daysError.style.display = 'none';
+          daysIn.classList.remove('invalid');
+          phase.days = v;
+          // Recompute only the dependent date labels in place, so typing in
+          // this field doesn't lose focus (a full rebuild would).
+          refreshPhaseDates();
+          updateQuitLabel();
+        });
 
         rowsWrap.appendChild(el('div', { class: 'phase-row' }, [
           el('div', { class: 'phase-grid' }, [
             el('label', { class: 'phase-field' }, [el('span', {}, 'Count'), countIn]),
-            el('label', { class: 'phase-field' }, [el('span', {}, 'Strength'), strengthIn]),
+            el('label', { class: 'phase-field' }, [el('span', {}, 'Nicotine'), strengthIn]),
             el('label', { class: 'phase-field' }, [el('span', {}, 'Days'), daysIn]),
             iconBtn('🗑', () => { s.phases.splice(i, 1); rebuild(); updateQuitLabel(); }),
           ]),
+          daysError,
           dateLabel,
         ]));
+        // Track this row's date label so refreshPhaseDates can update it.
+        dateLabels.push(dateLabel);
       });
     }
     rebuild();
