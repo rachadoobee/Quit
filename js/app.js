@@ -397,58 +397,112 @@
     /* --- Step 2: Tapering plan --- */
     function stepPlan() {
       const startISO = new Date().toISOString(); // preview dates from today
+      // The phase editor helper reads programmeStartDate off the object it is
+      // given; during onboarding the real start date isn't set yet, so use a
+      // preview start of today for the date labels.
+      draft.programmeStartDate = startISO;
 
-      // Holds the editable table; rebuilt when a quit date is chosen.
-      const tableWrap = el('div');
-      function buildTable() {
-        tableWrap.innerHTML = '';
-        tableWrap.appendChild(
-          planTable(draft.taperPlan, startISO, (week, val) => {
-            const row = draft.taperPlan.find((p) => p.week === week);
-            if (row) row.allowance = val;
-          })
-        );
-      }
-      buildTable();
-
-      // Quit-date picker: default 8 weeks out, min = next week.
-      const defaultQuit = new Date();
-      defaultQuit.setDate(defaultQuit.getDate() + 56);
-      const minQuit = new Date();
-      minQuit.setDate(minQuit.getDate() + 7);
-      const quitPicker = el('input', {
-        type: 'date',
-        value: DB.toDateKey(defaultQuit),
-        min: DB.toDateKey(minQuit),
-      });
-
-      const quitRow = el('div', { class: 'card quit-picker' }, [
-        el('div', { class: 'field' }, [
-          el('span', {}, 'Want to quit by a set date? Pick it and we’ll build the plan.'),
-          quitPicker,
-        ]),
-        el('button', {
-          class: 'btn-secondary',
-          onClick: () => {
-            draft.taperPlan = Taper.generatePlanForQuitDate(
-              draft.dailyBaseline,
-              startISO,
-              new Date(quitPicker.value + 'T00:00:00')
-            );
-            buildTable();
-            showToast('Plan built for your quit date.');
-          },
-        }, 'Build plan for this date'),
+      // Plan-type switch.
+      const typeRow = el('div', { class: 'plan-type-row' }, [
+        planTypeBtn('Weekly taper', draft.planType !== 'phases', () => setType('weekly')),
+        planTypeBtn('Custom phases', draft.planType === 'phases', () => setType('phases')),
       ]);
 
+      // Body swaps between the two editors.
+      const body = el('div');
+
+      function setType(type) {
+        if (type === 'phases' && draft.planType !== 'phases') {
+          if (!Array.isArray(draft.phases) || draft.phases.length === 0) {
+            draft.phases = seedPhasesFromWeekly(draft.taperPlan);
+          }
+          draft.planType = 'phases';
+        } else if (type === 'weekly') {
+          draft.planType = 'weekly';
+        }
+        step = 2; // stay on this step
+        render();
+      }
+
+      function buildWeekly() {
+        body.innerHTML = '';
+
+        const tableWrap = el('div');
+        function buildTable() {
+          tableWrap.innerHTML = '';
+          tableWrap.appendChild(
+            planTable(draft.taperPlan, startISO, (week, val) => {
+              const row = draft.taperPlan.find((p) => p.week === week);
+              if (row) row.allowance = val;
+            })
+          );
+        }
+        buildTable();
+
+        // Quit-date picker: default 8 weeks out, min = next week.
+        const defaultQuit = new Date();
+        defaultQuit.setDate(defaultQuit.getDate() + 56);
+        const minQuit = new Date();
+        minQuit.setDate(minQuit.getDate() + 7);
+        const quitPicker = el('input', {
+          type: 'date',
+          value: DB.toDateKey(defaultQuit),
+          min: DB.toDateKey(minQuit),
+        });
+
+        const quitRow = el('div', { class: 'card quit-picker' }, [
+          el('div', { class: 'field' }, [
+            el('span', {}, 'Want to quit by a set date? Pick it and we’ll build the plan.'),
+            quitPicker,
+          ]),
+          el('button', {
+            class: 'btn-secondary',
+            onClick: () => {
+              draft.taperPlan = Taper.generatePlanForQuitDate(
+                draft.dailyBaseline,
+                startISO,
+                new Date(quitPicker.value + 'T00:00:00')
+              );
+              buildTable();
+              showToast('Plan built for your quit date.');
+            },
+          }, 'Build plan for this date'),
+        ]);
+
+        body.appendChild(el('p', { class: 'muted' },
+          'Week 1 starts at your current usage. You can override any week, or set a quit date to auto-build the plan.'));
+        body.appendChild(tableWrap);
+        body.appendChild(quitRow);
+      }
+
+      function buildPhases() {
+        body.innerHTML = '';
+        // Reuse the Settings phase editor on the draft object.
+        buildPhaseEditor(body, draft, () => {});
+      }
+
+      if (draft.planType === 'phases') buildPhases();
+      else buildWeekly();
+
       return el('div', { class: 'card' }, [
-        el('h2', {}, 'Your tapering plan'),
-        el('p', { class: 'muted' }, 'Week 1 starts at your current usage. You can override any week, or set a quit date below to auto-build the plan.'),
-        tableWrap,
-        quitRow,
+        el('h2', {}, 'Your plan'),
+        typeRow,
+        body,
         el('div', { class: 'row-gap' }, [
           el('button', { class: 'btn-secondary', onClick: () => { step = 1; render(); } }, 'Back'),
-          el('button', { class: 'btn-primary', onClick: () => { step = 3; render(); } }, 'Confirm plan'),
+          el('button', {
+            class: 'btn-primary',
+            onClick: () => {
+              // Custom phase plans need at least one phase to proceed.
+              if (draft.planType === 'phases' &&
+                  (!draft.phases || draft.phases.length === 0)) {
+                showToast('Add at least one phase to continue.');
+                return;
+              }
+              step = 3;
+              render();
+            },
+          }, 'Confirm plan'),
         ]),
       ]);
     }
